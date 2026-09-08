@@ -1,0 +1,61 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+coverage/
+
+# Build
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Local application data
+docker-data/
+data/
+
+# Temporary
+tmp/
+temp/
+
+# Secrets / certificates
+*.pem
+*.key
+*.crt
+
+# Test artifacts
+test-results/
+playwright-report/
