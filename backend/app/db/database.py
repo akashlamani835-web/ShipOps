@@ -1,4 +1,5 @@
 from collections.abc import Generator
+import logging
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -6,6 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import get_settings
 
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 engine = create_engine(
@@ -38,4 +40,5 @@ def check_database_health() -> bool:
             connection.execute(text("SELECT 1"))
         return True
     except Exception:
+        logger.exception("PostgreSQL health check failed")
         return False

@@ -1,13 +1,5 @@
-from fastapi.testclient import TestClient
-
-from app.main import app
-
-
-client = TestClient(app)
-
-
-def test_topology_impact_for_sw07():
-    response = client.get(
+def test_topology_impact_for_sw07(api_client):
+    response = api_client.get(
         "/api/v1/topology/assets/SW-07/impact",
     )
 
@@ -30,8 +22,8 @@ def test_topology_impact_for_sw07():
     assert data["affected_count"] == 7
 
 
-def test_topology_impact_for_pos_terminal():
-    response = client.get(
+def test_topology_impact_for_pos_terminal(api_client):
+    response = api_client.get(
         "/api/v1/topology/assets/POS-07-01/impact",
     )
 
@@ -43,12 +35,13 @@ def test_topology_impact_for_pos_terminal():
     assert "POS-07-01" not in data["affected_assets"]
 
 
-def test_unknown_asset_returns_404():
-    response = client.get(
+def test_unknown_asset_returns_404(api_client):
+    response = api_client.get(
         "/api/v1/topology/assets/DOES-NOT-EXIST/impact",
     )
 
     assert response.status_code == 404
+
     assert response.json()["detail"] == (
         "Asset 'DOES-NOT-EXIST' not found."
     )

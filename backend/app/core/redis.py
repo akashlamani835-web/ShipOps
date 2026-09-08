@@ -1,8 +1,11 @@
+import logging
+
 from redis import Redis
 
 from app.core.config import get_settings
 
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 redis_client = Redis.from_url(
@@ -18,4 +21,5 @@ def check_redis_health() -> bool:
     try:
         return bool(redis_client.ping())
     except Exception:
+        logger.exception("Redis health check failed")
         return False
