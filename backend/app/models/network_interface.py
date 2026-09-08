@@ -1,7 +1,14 @@
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -19,6 +26,10 @@ class NetworkInterface(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             "asset_id",
             "name",
             name="uq_network_interfaces_asset_id_name",
+        ),
+        CheckConstraint(
+            "speed_mbps IS NULL OR speed_mbps > 0",
+            name="speed_mbps_positive",
         ),
     )
 

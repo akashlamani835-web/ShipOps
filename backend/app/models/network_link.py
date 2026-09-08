@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import Float, ForeignKey, Integer, String
+from sqlalchemy import CheckConstraint, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -12,6 +12,22 @@ if TYPE_CHECKING:
 
 class NetworkLink(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "network_links"
+
+    __table_args__ = (
+        CheckConstraint(
+            "capacity_mbps IS NULL OR capacity_mbps > 0",
+            name="capacity_mbps_positive",
+        ),
+        CheckConstraint(
+            "latency_ms IS NULL OR latency_ms >= 0",
+            name="latency_ms_non_negative",
+        ),
+        CheckConstraint(
+            "packet_loss_percent IS NULL "
+            "OR (packet_loss_percent >= 0 AND packet_loss_percent <= 100)",
+            name="packet_loss_percent_valid",
+        ),
+    )
 
     source_interface_id: Mapped[UUID] = mapped_column(
         ForeignKey("network_interfaces.id", ondelete="CASCADE"),

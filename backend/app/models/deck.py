@@ -1,7 +1,13 @@
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -19,6 +25,10 @@ class Deck(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             "vessel_id",
             "deck_number",
             name="uq_decks_vessel_id_deck_number",
+        ),
+        CheckConstraint(
+            "deck_number > 0",
+            name="deck_number_positive",
         ),
     )
 

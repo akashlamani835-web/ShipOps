@@ -32,17 +32,17 @@ class UUIDPrimaryKeyMixin:
 
 
 class TimestampMixin:
-    """Provide creation and update timestamps."""
+    """Provide timezone-aware UTC timestamps."""
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=lambda: datetime.now().astimezone(),
         nullable=False,
     )
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=lambda: datetime.now().astimezone(),
+        onupdate=lambda: datetime.now().astimezone(),
         nullable=False,
     )
