@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -87,15 +88,31 @@ class TelemetrySample(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             "idempotency_key",
             name="uq_telemetry_samples_idempotency_key",
         ),
+        UniqueConstraint(
+            "asset_id",
+            "source",
+            "source_sequence",
+            name="uq_telemetry_samples_asset_source_sequence",
+        ),
         Index(
             "ix_telemetry_samples_asset_metric_observed_at",
             "asset_id",
             "metric_definition_id",
             "observed_at",
         ),
+        Index(
+            "ix_telemetry_samples_asset_source_sequence",
+            "asset_id",
+            "source",
+            "source_sequence",
+        ),
         CheckConstraint(
             "observed_at <= received_at",
             name="telemetry_observed_before_received",
+        ),
+        CheckConstraint(
+            "source_sequence >= 0",
+            name="telemetry_source_sequence_non_negative",
         ),
     )
 
@@ -132,6 +149,11 @@ class TelemetrySample(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         String(50),
         nullable=False,
         index=True,
+    )
+
+    source_sequence: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
     )
 
     quality: Mapped[str] = mapped_column(

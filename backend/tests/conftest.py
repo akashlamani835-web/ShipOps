@@ -19,6 +19,7 @@ from app.models import (
     Vessel,
     Zone,
 )
+from app.telemetry.models import MetricDefinition
 
 
 def build_test_database_url() -> URL:
@@ -62,7 +63,10 @@ def db_session(test_engine) -> Generator[Session, None, None]:
         yield session
     finally:
         session.close()
-        transaction.rollback()
+
+        if transaction.is_active:
+            transaction.rollback()
+
         connection.close()
 
 
@@ -321,6 +325,26 @@ def seeded_topology(db_session: Session) -> dict[str, Asset]:
         "pos3": pos3,
         "pos4": pos4,
     }
+
+
+@pytest.fixture
+def packet_loss_metric(db_session: Session) -> MetricDefinition:
+    """Create the packet-loss metric used by telemetry tests."""
+
+    metric = MetricDefinition(
+        code="packet_loss",
+        name="Packet Loss",
+        unit="percent",
+        minimum_value=0,
+        maximum_value=100,
+        description="Percentage of packets lost.",
+        active=True,
+    )
+
+    db_session.add(metric)
+    db_session.flush()
+
+    return metric
 
 
 @pytest.fixture
