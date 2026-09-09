@@ -351,6 +351,7 @@ def packet_loss_metric(db_session: Session) -> MetricDefinition:
 def api_client(
     db_session: Session,
     seeded_topology: dict[str, Asset],
+    packet_loss_metric: MetricDefinition,
 ) -> Generator[TestClient, None, None]:
     """Provide an API client connected to the isolated test session."""
 
