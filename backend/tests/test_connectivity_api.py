@@ -196,3 +196,104 @@ def test_link_update_persists_across_status_requests():
 
     assert body["link"]["state"] == "degraded"
     assert body["link"]["available_kbps"] == 250
+
+
+def test_retry_empty_queue_returns_no_decisions():
+    reset_connectivity_service()
+
+    response = client.post("/connectivity/retry")
+
+    assert response.status_code == 200
+
+    body = response.json()
+
+    assert body["decisions"] == []
+    assert body["queued_traffic_count"] == 0
+
+
+def test_retry_transmits_queued_traffic_after_connectivity_recovers():
+    reset_connectivity_service()
+
+    unavailable_response = client.post(
+        "/connectivity/link",
+        params={
+            "state": "unavailable",
+            "available_kbps": 0,
+        },
+    )
+
+    assert unavailable_response.status_code == 200
+
+    traffic_response = client.post(
+        "/connectivity/traffic",
+        json={
+            "traffic_id": "recovery-001",
+            "traffic_class": "normal",
+            "size_kb": 500,
+            "required_kbps": 100,
+        },
+    )
+
+    assert traffic_response.status_code == 200
+    assert traffic_response.json()["action"] == "queue"
+
+    recovery_response = client.post(
+        "/connectivity/link",
+        params={
+            "state": "available",
+            "available_kbps": 750,
+        },
+    )
+
+    assert recovery_response.status_code == 200
+
+    retry_response = client.post("/connectivity/retry")
+
+    assert retry_response.status_code == 200
+
+    body = retry_response.json()
+
+    assert len(body["decisions"]) == 1
+    assert body["decisions"][0]["traffic_id"] == "recovery-001"
+    assert body["decisions"][0]["action"] == "transmit"
+    assert body["decisions"][0]["allocated_kbps"] == 100
+    assert body["queued_traffic_count"] == 0
+
+
+def test_retry_keeps_traffic_queued_when_connectivity_remains_unavailable():
+    reset_connectivity_service()
+
+    unavailable_response = client.post(
+        "/connectivity/link",
+        params={
+            "state": "unavailable",
+            "available_kbps": 0,
+        },
+    )
+
+    assert unavailable_response.status_code == 200
+
+    traffic_response = client.post(
+        "/connectivity/traffic",
+        json={
+            "traffic_id": "recovery-002",
+            "traffic_class": "high",
+            "size_kb": 500,
+            "required_kbps": 100,
+        },
+    )
+
+    assert traffic_response.status_code == 200
+    assert traffic_response.json()["action"] == "queue"
+
+    retry_response = client.post("/connectivity/retry")
+
+    assert retry_response.status_code == 200
+
+    body = retry_response.json()
+
+    assert len(body["decisions"]) == 1
+    assert body["decisions"][0]["traffic_id"] == "recovery-002"
+    assert body["decisions"][0]["action"] == "queue"
+    assert body["decisions"][0]["allocated_kbps"] == 0
+    assert body["queued_traffic_count"] == 1

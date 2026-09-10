@@ -117,3 +117,30 @@ def update_connectivity_link(
         "capacity_kbps": link.capacity_kbps,
         "available_kbps": link.available_kbps,
     }
+
+
+@router.post("/retry")
+def retry_connectivity_queue() -> dict:
+    """
+    Retry traffic currently waiting in the local connectivity queue.
+
+    The service re-evaluates queued requests using the current link state,
+    policy, and scheduler.
+    """
+
+    service = get_connectivity_service()
+    decisions = service.retry_queue()
+
+    return {
+        "decisions": [
+            {
+                "traffic_id": decision.traffic_id,
+                "traffic_class": decision.traffic_class.value,
+                "action": decision.action,
+                "allocated_kbps": decision.allocated_kbps,
+                "reason": decision.reason,
+            }
+            for decision in decisions
+        ],
+        "queued_traffic_count": len(service.queued_traffic()),
+    }
