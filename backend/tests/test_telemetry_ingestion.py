@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import func, select
@@ -328,3 +329,41 @@ def test_out_of_order_sequence_is_accepted(
     )
 
     assert count == 2
+
+
+def test_event_engine_is_triggered_after_telemetry_persistence(
+    db_session: Session,
+    seeded_topology,
+    packet_loss_metric,
+):
+    """A persisted telemetry sample is forwarded to the event engine."""
+
+    asset = seeded_topology["switch"]
+
+    event_service = Mock()
+
+    service = TelemetryIngestionService(
+        db_session,
+        event_service=event_service,
+    )
+
+    request = build_request(
+        value=38,
+        idempotency_key="event-integration-500",
+        source_sequence=500,
+    )
+
+    result = service.ingest(request)
+
+    assert result.status == "accepted"
+    assert result.idempotent_replay is False
+
+    event_service.process_sample.assert_called_once()
+
+    persisted_sample = (
+        event_service.process_sample.call_args.args[0]
+    )
+
+    assert str(persisted_sample.asset_id) == str(asset.id)
+    assert persisted_sample.value == 38
+    assert persisted_sample.source_sequence == 500

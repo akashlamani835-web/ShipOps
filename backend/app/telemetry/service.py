@@ -1,6 +1,9 @@
+import logging
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.events.service import EventService
 from app.telemetry.cache import TelemetryCache
 from app.telemetry.repository import TelemetryRepository
 from app.telemetry.schemas import (
@@ -13,17 +16,22 @@ from app.telemetry.validators import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class TelemetryIngestionService:
-    """Validate, persist, and cache incoming telemetry."""
+    """Validate, persist, cache, and evaluate incoming telemetry."""
 
     def __init__(
         self,
         db: Session,
         cache: TelemetryCache | None = None,
+        event_service: EventService | None = None,
     ) -> None:
         self._db = db
         self._repository = TelemetryRepository(db)
         self._cache = cache or TelemetryCache()
+        self._event_service = event_service or EventService(db)
 
     def ingest(
         self,
@@ -32,8 +40,13 @@ class TelemetryIngestionService:
         """
         Validate and persist a telemetry sample.
 
-        PostgreSQL is the durable source of truth. Redis is a
-        best-effort latest-value cache.
+        PostgreSQL is the durable source of truth.
+        Redis is a best-effort latest-value cache.
+
+        Event processing happens after the telemetry sample has
+        been created. Event processing is isolated in a nested
+        transaction so an event-processing failure cannot roll
+        back the telemetry persistence.
         """
 
         asset = self._repository.get_asset_by_identifier(
@@ -153,6 +166,19 @@ class TelemetryIngestionService:
             source_sequence=sample.source_sequence,
             telemetry_id=sample.id,
         )
+
+        try:
+            with self._db.begin_nested():
+                self._event_service.process_sample(sample)
+        except Exception:
+            logger.exception(
+                "Event processing failed after telemetry persistence",
+                extra={
+                    "telemetry_id": str(sample.id),
+                    "asset_id": str(sample.asset_id),
+                    "metric": metric_definition.code,
+                },
+            )
 
         return TelemetryIngestResponse(
             status="accepted",
