@@ -177,3 +177,38 @@ def run_connectivity_simulation() -> dict:
         "transmitted_kbps": result.transmitted_kbps,
         "queued_kbps": result.queued_kbps,
     }
+
+
+@router.get("/metrics")
+def get_connectivity_metrics() -> dict:
+    """
+    Return operational connectivity metrics for the current API service.
+    """
+
+    service = get_connectivity_service()
+    metrics = service.metrics_snapshot()
+
+    return {
+        "traffic": {
+            "total_requests": metrics.total_requests,
+            "transmitted_requests": metrics.transmitted_requests,
+            "throttled_requests": metrics.throttled_requests,
+            "queued_requests": metrics.queued_requests,
+        },
+        "bandwidth_kbps": {
+            "transmitted": metrics.transmitted_kbps,
+            "throttled": metrics.throttled_kbps,
+            "queued": metrics.queued_kbps,
+        },
+        "connectivity_states": {
+            "available_observations": (
+                metrics.available_state_count
+            ),
+            "degraded_observations": (
+                metrics.degraded_state_count
+            ),
+            "unavailable_observations": (
+                metrics.unavailable_state_count
+            ),
+        },
+    }

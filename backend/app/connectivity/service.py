@@ -1,6 +1,10 @@
 from dataclasses import dataclass, replace
 
 from app.connectivity.accounting import BandwidthAccounting, TrafficUsage
+from app.connectivity.metrics import (
+    ConnectivityMetrics,
+    ConnectivityMetricsSnapshot,
+)
 from app.connectivity.models import (
     ConnectivityLink,
     ConnectivityState,
@@ -33,6 +37,7 @@ class ConnectivityService:
     - scheduling
     - local queuing
     - bandwidth accounting
+    - operational metrics
 
     ConnectivityPolicy is authoritative for whether traffic is permitted
     to transmit and establishes the maximum bandwidth allocation allowed
@@ -48,11 +53,13 @@ class ConnectivityService:
         policy: ConnectivityPolicy | None = None,
         scheduler: ConnectivityScheduler | None = None,
         accounting: BandwidthAccounting | None = None,
+        metrics: ConnectivityMetrics | None = None,
     ) -> None:
         self._link = link
         self._policy = policy or ConnectivityPolicy()
         self._scheduler = scheduler or ConnectivityScheduler()
         self._accounting = accounting or BandwidthAccounting()
+        self._metrics = metrics or ConnectivityMetrics()
         self._queue: list[TrafficRequest] = []
 
     @property
@@ -66,6 +73,12 @@ class ConnectivityService:
         """Return the bandwidth accounting tracker."""
 
         return self._accounting
+
+    @property
+    def metrics(self) -> ConnectivityMetrics:
+        """Return the operational metrics tracker."""
+
+        return self._metrics
 
     def update_link(
         self,
@@ -81,6 +94,8 @@ class ConnectivityService:
             capacity_kbps=self._link.capacity_kbps,
             available_kbps=available_kbps,
         )
+
+        self._metrics.record_state(state)
 
         return self._link
 
@@ -145,6 +160,11 @@ class ConnectivityService:
                 self._enqueue(request)
 
                 self._accounting.record(
+                    policy_decision,
+                    requested_kbps=request.required_kbps,
+                )
+
+                self._metrics.record_decision(
                     policy_decision,
                     requested_kbps=request.required_kbps,
                 )
@@ -247,10 +267,21 @@ class ConnectivityService:
 
         return self._accounting.total()
 
+    def metrics_snapshot(self) -> ConnectivityMetricsSnapshot:
+        """Return aggregate operational metrics."""
+
+        return self._metrics.snapshot()
+
     def reset_usage(self) -> None:
-        """Reset all simulated bandwidth accounting."""
+        """
+        Reset bandwidth accounting and operational metrics.
+
+        Resetting clears all recorded traffic, bandwidth, and connectivity
+        observations.
+        """
 
         self._accounting.reset()
+        self._metrics.reset()
 
     def _apply_decision(
         self,
@@ -264,6 +295,11 @@ class ConnectivityService:
             self._enqueue(request)
 
         self._accounting.record(
+            decision,
+            requested_kbps=request.required_kbps,
+        )
+
+        self._metrics.record_decision(
             decision,
             requested_kbps=request.required_kbps,
         )

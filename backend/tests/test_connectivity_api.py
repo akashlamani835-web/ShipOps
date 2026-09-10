@@ -373,3 +373,130 @@ def test_simulation_does_not_modify_persistent_api_service_state():
         "queued_requests": 0,
         "queued_kbps": 0,
     }
+
+
+def test_connectivity_metrics_start_empty():
+    reset_connectivity_service()
+
+    response = client.get("/connectivity/metrics")
+
+    assert response.status_code == 200
+
+    body = response.json()
+
+    assert body["traffic"] == {
+        "total_requests": 0,
+        "transmitted_requests": 0,
+        "throttled_requests": 0,
+        "queued_requests": 0,
+    }
+
+    assert body["bandwidth_kbps"] == {
+        "transmitted": 0,
+        "throttled": 0,
+        "queued": 0,
+    }
+
+    assert body["connectivity_states"] == {
+        "available_observations": 1,
+        "degraded_observations": 0,
+        "unavailable_observations": 0,
+    }
+
+
+def test_connectivity_metrics_reflect_traffic_and_link_changes():
+    reset_connectivity_service()
+
+    degraded_response = client.post(
+        "/connectivity/link",
+        params={
+            "state": "degraded",
+            "available_kbps": 300,
+        },
+    )
+
+    assert degraded_response.status_code == 200
+
+    critical_response = client.post(
+        "/connectivity/traffic",
+        json={
+            "traffic_id": "metrics-critical-001",
+            "traffic_class": "critical",
+            "size_kb": 500,
+            "required_kbps": 100,
+        },
+    )
+
+    assert critical_response.status_code == 200
+
+    bulk_response = client.post(
+        "/connectivity/traffic",
+        json={
+            "traffic_id": "metrics-bulk-001",
+            "traffic_class": "bulk",
+            "size_kb": 1_000,
+            "required_kbps": 200,
+        },
+    )
+
+    assert bulk_response.status_code == 200
+
+    response = client.get("/connectivity/metrics")
+
+    assert response.status_code == 200
+
+    body = response.json()
+
+    assert body["traffic"]["total_requests"] == 2
+    assert body["traffic"]["transmitted_requests"] == 1
+    assert body["traffic"]["throttled_requests"] == 0
+    assert body["traffic"]["queued_requests"] == 1
+
+    assert body["bandwidth_kbps"]["transmitted"] == 100
+    assert body["bandwidth_kbps"]["queued"] == 200
+
+    assert body["connectivity_states"] == {
+        "available_observations": 1,
+        "degraded_observations": 1,
+        "unavailable_observations": 0,
+    }
+
+
+def test_connectivity_metrics_reset_with_service_usage_reset():
+    reset_connectivity_service()
+
+    response = client.post(
+        "/connectivity/traffic",
+        json={
+            "traffic_id": "metrics-reset-001",
+            "traffic_class": "high",
+            "size_kb": 500,
+            "required_kbps": 100,
+        },
+    )
+
+    assert response.status_code == 200
+
+    service = get_connectivity_service()
+    service.reset_usage()
+
+    metrics_response = client.get("/connectivity/metrics")
+
+    assert metrics_response.status_code == 200
+
+    body = metrics_response.json()
+
+    assert body["traffic"]["total_requests"] == 0
+    assert body["traffic"]["transmitted_requests"] == 0
+    assert body["traffic"]["throttled_requests"] == 0
+    assert body["traffic"]["queued_requests"] == 0
+
+    assert body["bandwidth_kbps"]["transmitted"] == 0
+    assert body["bandwidth_kbps"]["throttled"] == 0
+    assert body["bandwidth_kbps"]["queued"] == 0
+
+    assert body["connectivity_states"] == {
+        "available_observations": 0,
+        "degraded_observations": 0,
+        "unavailable_observations": 0,
+    }
