@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.connectivity.models import (
     ConnectivityLink,
     ConnectivityState,
+    TrafficRequest,
 )
 from app.connectivity.service import ConnectivityService
 
@@ -13,23 +14,26 @@ router = APIRouter(
 )
 
 
+_connectivity_service = ConnectivityService(
+    link=ConnectivityLink(
+        name="satellite-link",
+        state=ConnectivityState.AVAILABLE,
+        capacity_kbps=1_000,
+        available_kbps=750,
+    )
+)
+
+
 def get_connectivity_service() -> ConnectivityService:
     """
-    Return the simulated connectivity service used by the API.
+    Return the application-level connectivity service.
 
-    The initial API slice uses a deterministic in-memory link.
-    Persistence and runtime dependency management can be introduced
-    separately once the endpoint contract is established.
+    The service is intentionally kept in memory for this simulation layer
+    so state such as queued traffic and bandwidth usage persists across
+    API requests.
     """
 
-    return ConnectivityService(
-        link=ConnectivityLink(
-            name="satellite-link",
-            state=ConnectivityState.AVAILABLE,
-            capacity_kbps=1_000,
-            available_kbps=750,
-        )
-    )
+    return _connectivity_service
 
 
 @router.get("/status")
@@ -64,4 +68,20 @@ def get_connectivity_status() -> dict:
             "queued_requests": usage.queued_requests,
             "queued_kbps": usage.queued_kbps,
         },
+    }
+
+
+@router.post("/traffic")
+def submit_traffic(request: TrafficRequest) -> dict:
+    """Submit a traffic request to the connectivity service."""
+
+    service = get_connectivity_service()
+    decision = service.submit(request)
+
+    return {
+        "traffic_id": decision.traffic_id,
+        "traffic_class": decision.traffic_class.value,
+        "action": decision.action,
+        "allocated_kbps": decision.allocated_kbps,
+        "reason": decision.reason,
     }
