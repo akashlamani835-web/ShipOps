@@ -8,6 +8,7 @@ from app.models.vessel import Vessel
 from app.models.zone import Zone
 from app.telemetry.models import MetricDefinition, TelemetrySample
 
+
 __all__ = [
     "Asset",
     "Base",
