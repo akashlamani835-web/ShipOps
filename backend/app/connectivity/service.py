@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from app.connectivity.models import (
     ConnectivityLink,
     ConnectivityState,
+    TrafficAction,
     TrafficDecision,
     TrafficRequest,
 )
@@ -26,8 +27,15 @@ class ConnectivityService:
     """
     Manage a simulated external connectivity link.
 
-    This service coordinates policy decisions, scheduling, local
-    queuing, and bandwidth accounting.
+    This service coordinates:
+    - policy decisions
+    - scheduling
+    - local queuing
+    - bandwidth usage tracking
+
+    ConnectivityPolicy is authoritative for whether traffic is permitted
+    to transmit. ConnectivityScheduler determines ordering and allocation
+    among traffic requests that the policy permits to be considered.
     """
 
     def __init__(
@@ -80,11 +88,7 @@ class ConnectivityService:
             request=request,
         )
 
-        if decision.action == "queue":
-            self._enqueue(request)
-
-        elif decision.action in {"transmit", "throttle"}:
-            self._transmitted_kbps += decision.allocated_kbps
+        self._apply_decision(request, decision)
 
         return decision
 
@@ -95,23 +99,62 @@ class ConnectivityService:
         """
         Schedule multiple competing traffic requests.
 
-        The scheduler determines priority and allocates the link's
-        currently available bandwidth.
+        Policy is evaluated first so that traffic explicitly deferred by
+        ConnectivityPolicy cannot bypass the policy through the scheduler.
+
+        The scheduler then allocates available bandwidth among requests
+        permitted by policy.
         """
 
-        results = self._scheduler.schedule(
+        policy_allowed: list[TrafficRequest] = []
+        policy_deferred: dict[str, ScheduledTraffic] = {}
+
+        for request in requests:
+            policy_decision = self._policy.decide(
+                link=self._link,
+                request=request,
+            )
+
+            if policy_decision.action == TrafficAction.QUEUE.value:
+                policy_deferred[request.traffic_id] = ScheduledTraffic(
+                    traffic_id=request.traffic_id,
+                    traffic_class=request.traffic_class,
+                    allocated_kbps=0,
+                    queued=True,
+                    reason=policy_decision.reason,
+                )
+                self._enqueue(request)
+                continue
+
+            policy_allowed.append(request)
+
+        scheduled = self._scheduler.schedule(
             available_kbps=self._link.available_kbps,
-            requests=requests,
+            requests=policy_allowed,
         )
 
-        for request, result in zip(
-            self._ordered_requests(requests),
-            results,
-        ):
+        scheduled_by_id = {
+            result.traffic_id: result
+            for result in scheduled
+        }
+
+        results: list[ScheduledTraffic] = []
+
+        for request in requests:
+            deferred = policy_deferred.get(request.traffic_id)
+
+            if deferred is not None:
+                results.append(deferred)
+                continue
+
+            result = scheduled_by_id[request.traffic_id]
+
             if result.queued:
                 self._enqueue(request)
             else:
                 self._transmitted_kbps += result.allocated_kbps
+
+            results.append(result)
 
         return results
 
@@ -135,14 +178,13 @@ class ConnectivityService:
 
         for result in scheduled:
             if result.queued:
-                action = "queue"
-
+                action = TrafficAction.QUEUE.value
                 reason = result.reason
 
                 if result.allocated_kbps > 0:
-                    action = "throttle"
+                    action = TrafficAction.THROTTLE.value
             else:
-                action = "transmit"
+                action = TrafficAction.TRANSMIT.value
                 reason = result.reason
 
             decisions.append(
@@ -176,27 +218,20 @@ class ConnectivityService:
 
         self._transmitted_kbps = 0
 
-    def _ordered_requests(
+    def _apply_decision(
         self,
-        requests: list[TrafficRequest],
-    ) -> list[TrafficRequest]:
-        """Return requests in exactly the scheduler's order."""
+        request: TrafficRequest,
+        decision: TrafficDecision,
+    ) -> None:
+        """Apply a policy decision to service state."""
 
-        pending = list(requests)
-        ordered: list[TrafficRequest] = []
-
-        while pending:
-            request = self._scheduler.next_request(
-                pending,
-            )
-
-            if request is None:
-                break
-
-            ordered.append(request)
-            pending.remove(request)
-
-        return ordered
+        if decision.action == TrafficAction.QUEUE.value:
+            self._enqueue(request)
+        elif decision.action in {
+            TrafficAction.TRANSMIT.value,
+            TrafficAction.THROTTLE.value,
+        }:
+            self._transmitted_kbps += decision.allocated_kbps
 
     def _enqueue(
         self,
