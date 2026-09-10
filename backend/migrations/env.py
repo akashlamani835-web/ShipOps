@@ -7,6 +7,7 @@ from sqlalchemy import pool
 from app.core.config import get_settings
 from app.models import Base
 from app.events import models as event_models  # noqa: F401
+from app.incidents import models as incident_models  # noqa: F401
 
 
 config = context.config

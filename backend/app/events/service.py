@@ -1,4 +1,5 @@
-from datetime import datetime, timezone, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -10,7 +11,11 @@ from app.events.models import (
     OperationalEvent,
 )
 from app.events.repository import EventRepository
+from app.incidents.automation import IncidentAutomationService
 from app.telemetry.models import TelemetrySample
+
+
+logger = logging.getLogger(__name__)
 
 
 class EventService:
@@ -19,6 +24,7 @@ class EventService:
     def __init__(self, db: Session) -> None:
         self._db = db
         self._repository = EventRepository(db)
+        self._incident_automation = IncidentAutomationService(db)
 
     def process_sample(
         self,
@@ -110,7 +116,39 @@ class EventService:
                     sample=evidence_sample,
                 )
 
+        self._automate_incident(
+            event,
+        )
+
         return event
+
+    def _automate_incident(
+        self,
+        event: OperationalEvent,
+    ) -> None:
+        """
+        Promote eligible events into incidents and attach RCA.
+
+        Incident automation is isolated from event persistence so a
+        failure in RCA or incident processing does not prevent the
+        operational event itself from being created.
+        """
+
+        try:
+            with self._db.begin_nested():
+                self._incident_automation.handle_event(
+                    event,
+                )
+        except Exception:
+            logger.exception(
+                "Automatic incident processing failed after event creation",
+                extra={
+                    "event_id": str(event.id),
+                    "asset_id": str(event.asset_id),
+                    "severity": event.severity.value,
+                    "event_type": event.event_type,
+                },
+            )
 
     def _attach_evidence(
         self,
