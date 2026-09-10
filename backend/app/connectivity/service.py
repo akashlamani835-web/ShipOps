@@ -253,6 +253,11 @@ class ConnectivityService:
 
         return tuple(self._queue)
 
+    def clear_queue(self) -> None:
+        """Clear all traffic currently waiting in the local queue."""
+
+        self._queue.clear()
+
     def snapshot(self) -> ConnectivitySnapshot:
         """Return a point-in-time service snapshot."""
 

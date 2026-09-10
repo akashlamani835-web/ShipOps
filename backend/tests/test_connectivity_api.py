@@ -11,7 +11,7 @@ client = TestClient(app)
 def reset_connectivity_service():
     service = get_connectivity_service()
 
-    service._queue.clear()
+    service.clear_queue()
     service.reset_usage()
     service.update_link(
         state=ConnectivityState.AVAILABLE,

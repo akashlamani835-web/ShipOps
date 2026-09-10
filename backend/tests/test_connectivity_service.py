@@ -7,8 +7,6 @@ from app.connectivity.models import (
     TrafficClass,
     TrafficRequest,
 )
-from app.connectivity.policy import ConnectivityPolicy
-from app.connectivity.scheduler import ConnectivityScheduler
 from app.connectivity.service import ConnectivityService
 
 
@@ -228,7 +226,7 @@ def test_service_retry_queue_keeps_traffic_queued_when_unavailable():
     assert service.queued_traffic() == (request,)
 
 
-def test_service_snapshot_returns_current_state():
+def test_snapshot_returns_current_state():
     service = build_service()
 
     request = TrafficRequest(
@@ -416,3 +414,26 @@ def test_reset_usage_clears_operational_metrics():
     assert metrics.available_state_count == 0
     assert metrics.degraded_state_count == 0
     assert metrics.unavailable_state_count == 0
+
+
+def test_clear_queue_removes_pending_traffic():
+    service = build_service(
+        state=ConnectivityState.UNAVAILABLE,
+        available_kbps=0,
+    )
+
+    request = TrafficRequest(
+        traffic_id="clear-queue-001",
+        traffic_class=TrafficClass.NORMAL,
+        size_kb=500,
+        required_kbps=100,
+    )
+
+    decision = service.submit(request)
+
+    assert decision.action == TrafficAction.QUEUE.value
+    assert service.queued_traffic() == (request,)
+
+    service.clear_queue()
+
+    assert service.queued_traffic() == ()
