@@ -500,3 +500,95 @@ def test_connectivity_metrics_reset_with_service_usage_reset():
         "degraded_observations": 0,
         "unavailable_observations": 0,
     }
+
+
+def test_submit_traffic_rejects_empty_traffic_id():
+    reset_connectivity_service()
+
+    response = client.post(
+        "/connectivity/traffic",
+        json={
+            "traffic_id": "",
+            "traffic_class": "high",
+            "size_kb": 500,
+            "required_kbps": 100,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_submit_traffic_rejects_invalid_traffic_class():
+    reset_connectivity_service()
+
+    response = client.post(
+        "/connectivity/traffic",
+        json={
+            "traffic_id": "validation-class-001",
+            "traffic_class": "invalid-class",
+            "size_kb": 500,
+            "required_kbps": 100,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_submit_traffic_rejects_non_positive_size():
+    reset_connectivity_service()
+
+    response = client.post(
+        "/connectivity/traffic",
+        json={
+            "traffic_id": "validation-size-001",
+            "traffic_class": "high",
+            "size_kb": 0,
+            "required_kbps": 100,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_submit_traffic_rejects_non_positive_required_bandwidth():
+    reset_connectivity_service()
+
+    response = client.post(
+        "/connectivity/traffic",
+        json={
+            "traffic_id": "validation-bandwidth-001",
+            "traffic_class": "high",
+            "size_kb": 500,
+            "required_kbps": 0,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_update_link_rejects_invalid_connectivity_state():
+    reset_connectivity_service()
+
+    response = client.post(
+        "/connectivity/link",
+        params={
+            "state": "invalid-state",
+            "available_kbps": 300,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_update_link_rejects_negative_available_bandwidth():
+    reset_connectivity_service()
+
+    response = client.post(
+        "/connectivity/link",
+        params={
+            "state": "degraded",
+            "available_kbps": -1,
+        },
+    )
+
+    assert response.status_code == 422

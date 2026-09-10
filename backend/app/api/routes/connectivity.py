@@ -1,8 +1,12 @@
-from fastapi import APIRouter
+from dataclasses import asdict
+
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from app.connectivity.models import (
-    ConnectivityLink,
     ConnectivityState,
+    ConnectivityLink,
+    TrafficClass,
     TrafficRequest,
 )
 from app.connectivity.service import ConnectivityService
@@ -26,121 +30,119 @@ _connectivity_service = ConnectivityService(
 
 
 def get_connectivity_service() -> ConnectivityService:
-    """
-    Return the application-level connectivity service.
-
-    The service is intentionally kept in memory for this simulation layer
-    so state such as queued traffic and bandwidth usage persists across
-    API requests.
-    """
+    """Return the persistent connectivity service used by the API."""
 
     return _connectivity_service
 
 
+class TrafficRequestPayload(BaseModel):
+    """Validated HTTP payload for connectivity traffic submission."""
+
+    traffic_id: str = Field(
+        ...,
+        min_length=1,
+        description="Unique identifier for the traffic request.",
+    )
+    traffic_class: TrafficClass
+    size_kb: int = Field(
+        ...,
+        gt=0,
+        description="Traffic payload size in kilobytes.",
+    )
+    required_kbps: int = Field(
+        ...,
+        gt=0,
+        description="Required bandwidth in kilobits per second.",
+    )
+    deadline: float | None = Field(
+        default=None,
+        description="Optional scheduling deadline.",
+    )
+
+
 @router.get("/status")
 def get_connectivity_status() -> dict:
-    """Return the current simulated external connectivity status."""
+    """Return the current connectivity link, queue, and usage state."""
 
     service = get_connectivity_service()
+
     snapshot = service.snapshot()
     usage = service.usage()
 
     return {
-        "link": {
-            "name": snapshot.link.name,
-            "state": snapshot.link.state.value,
-            "capacity_kbps": snapshot.link.capacity_kbps,
-            "available_kbps": snapshot.link.available_kbps,
-        },
+        "link": asdict(snapshot.link),
         "queued_traffic": [
-            {
-                "traffic_id": request.traffic_id,
-                "traffic_class": request.traffic_class.value,
-                "size_kb": request.size_kb,
-                "required_kbps": request.required_kbps,
-                "deadline": request.deadline,
-            }
+            asdict(request)
             for request in snapshot.queued_traffic
         ],
-        "usage": {
-            "requests": usage.requests,
-            "transmitted_kbps": usage.transmitted_kbps,
-            "throttled_kbps": usage.throttled_kbps,
-            "queued_requests": usage.queued_requests,
-            "queued_kbps": usage.queued_kbps,
-        },
+        "usage": asdict(usage),
     }
 
 
 @router.post("/traffic")
-def submit_traffic(request: TrafficRequest) -> dict:
-    """Submit a traffic request to the connectivity service."""
+def submit_connectivity_traffic(
+    payload: TrafficRequestPayload,
+) -> dict:
+    """Submit one traffic request to the connectivity policy engine."""
 
     service = get_connectivity_service()
+
+    request = TrafficRequest(
+        traffic_id=payload.traffic_id,
+        traffic_class=payload.traffic_class,
+        size_kb=payload.size_kb,
+        required_kbps=payload.required_kbps,
+        deadline=payload.deadline,
+    )
+
     decision = service.submit(request)
 
-    return {
-        "traffic_id": decision.traffic_id,
-        "traffic_class": decision.traffic_class.value,
-        "action": decision.action,
-        "allocated_kbps": decision.allocated_kbps,
-        "reason": decision.reason,
-    }
+    return asdict(decision)
 
 
 @router.post("/link")
 def update_connectivity_link(
     state: ConnectivityState,
-    available_kbps: int,
+    available_kbps: int = Query(
+        ...,
+        ge=0,
+        description="Currently available bandwidth in kilobits per second.",
+    ),
 ) -> dict:
     """
-    Update the simulated external connectivity link.
+    Update the simulated connectivity link.
 
-    This endpoint allows the demonstration environment to simulate
-    available, degraded, and unavailable connectivity conditions.
+    FastAPI validates the state enum and non-negative bandwidth before
+    the request reaches the service layer.
     """
-
-    if available_kbps < 0:
-        raise ValueError(
-            "Available bandwidth cannot be negative.",
-        )
 
     service = get_connectivity_service()
 
-    link = service.update_link(
-        state=state,
-        available_kbps=available_kbps,
-    )
+    try:
+        link = service.update_link(
+            state=state,
+            available_kbps=available_kbps,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
 
-    return {
-        "name": link.name,
-        "state": link.state.value,
-        "capacity_kbps": link.capacity_kbps,
-        "available_kbps": link.available_kbps,
-    }
+    return asdict(link)
 
 
 @router.post("/retry")
 def retry_connectivity_queue() -> dict:
-    """
-    Retry traffic currently waiting in the local connectivity queue.
-
-    The service re-evaluates queued requests using the current link state,
-    policy, and scheduler.
-    """
+    """Retry traffic currently waiting in the local connectivity queue."""
 
     service = get_connectivity_service()
+
     decisions = service.retry_queue()
 
     return {
         "decisions": [
-            {
-                "traffic_id": decision.traffic_id,
-                "traffic_class": decision.traffic_class.value,
-                "action": decision.action,
-                "allocated_kbps": decision.allocated_kbps,
-                "reason": decision.reason,
-            }
+            asdict(decision)
             for decision in decisions
         ],
         "queued_traffic_count": len(service.queued_traffic()),
@@ -150,10 +152,8 @@ def retry_connectivity_queue() -> dict:
 @router.post("/simulate")
 def run_connectivity_simulation() -> dict:
     """
-    Run the deterministic end-to-end connectivity resilience scenario.
-
-    The simulation uses its own isolated connectivity service and therefore
-    does not modify the state of the API's persistent connectivity service.
+    Run an isolated connectivity degradation, outage, and recovery
+    simulation.
     """
 
     result = ConnectivitySimulation().run()
@@ -181,9 +181,7 @@ def run_connectivity_simulation() -> dict:
 
 @router.get("/metrics")
 def get_connectivity_metrics() -> dict:
-    """
-    Return operational connectivity metrics for the current API service.
-    """
+    """Return operational connectivity metrics for the current API service."""
 
     service = get_connectivity_service()
     metrics = service.metrics_snapshot()
@@ -201,14 +199,8 @@ def get_connectivity_metrics() -> dict:
             "queued": metrics.queued_kbps,
         },
         "connectivity_states": {
-            "available_observations": (
-                metrics.available_state_count
-            ),
-            "degraded_observations": (
-                metrics.degraded_state_count
-            ),
-            "unavailable_observations": (
-                metrics.unavailable_state_count
-            ),
+            "available_observations": metrics.available_state_count,
+            "degraded_observations": metrics.degraded_state_count,
+            "unavailable_observations": metrics.unavailable_state_count,
         },
     }
