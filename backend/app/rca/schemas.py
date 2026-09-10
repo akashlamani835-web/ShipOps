@@ -13,6 +13,7 @@ class RCACandidate:
     asset_type: str
     distance: int
     score: float
+    telemetry_support: int
     reasons: tuple[str, ...]
 
 

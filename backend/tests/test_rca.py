@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 
 from app.events.models import (
     EventRule,
@@ -10,6 +11,7 @@ from app.events.models import (
     OperationalEvent,
 )
 from app.rca.engine import RCAEngine
+from app.telemetry.models import TelemetrySample
 from app.topology.service import TopologyService
 
 
@@ -66,6 +68,57 @@ def create_event(
     return event
 
 
+def add_candidate_telemetry(
+    db_session,
+    *,
+    asset,
+    metric,
+    values: list[float],
+):
+    """Add candidate telemetry immediately before the event."""
+
+    event_time = datetime(
+        2026,
+        9,
+        10,
+        10,
+        0,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    samples = []
+
+    for index, value in enumerate(values):
+        observed_at = (
+            event_time
+            - timedelta(
+                minutes=4 - index,
+            )
+        )
+
+        samples.append(
+            TelemetrySample(
+                asset_id=asset.id,
+                metric_definition_id=metric.id,
+                value=value,
+                observed_at=observed_at,
+                received_at=observed_at + timedelta(seconds=1),
+                source="edge_gateway",
+                source_sequence=100 + index,
+                quality="good",
+                idempotency_key=(
+                    f"rca-candidate-{asset.identifier}-{index}"
+                ),
+            )
+        )
+
+    db_session.add_all(samples)
+    db_session.flush()
+
+    return samples
+
+
 def test_rca_prefers_network_infrastructure_candidate(
     db_session,
     seeded_topology,
@@ -83,13 +136,9 @@ def test_rca_prefers_network_infrastructure_candidate(
 
     assert result.event_id == event.id
     assert result.affected_asset_identifier == "POS-07-01"
-
     assert result.root_cause_identifier == "SW-07"
-
     assert result.confidence > 0.50
-
     assert len(result.candidates) >= 3
-
     assert result.candidates[0].identifier == "SW-07"
 
 
@@ -147,6 +196,92 @@ def test_rca_explanation_contains_supporting_factors(
     assert "network infrastructure role" in result.explanation
     assert "topology proximity" in result.explanation
     assert "network connectivity" in result.explanation
+    assert "no corroborating candidate telemetry" in result.explanation
+
+
+def test_rca_uses_candidate_telemetry_as_evidence(
+    db_session,
+    seeded_topology,
+    packet_loss_metric,
+):
+    event = create_event(
+        db_session,
+        seeded_topology,
+        packet_loss_metric,
+    )
+
+    switch = seeded_topology["switch"]
+
+    samples = add_candidate_telemetry(
+        db_session,
+        asset=switch,
+        metric=packet_loss_metric,
+        values=[35, 42, 38],
+    )
+
+    engine = RCAEngine(db_session)
+
+    result = engine.analyze(event.id)
+
+    winner = result.candidates[0]
+
+    assert winner.identifier == "SW-07"
+    assert winner.telemetry_support == 3
+    assert any(
+        "corroborating telemetry" in reason
+        for reason in winner.reasons
+    )
+
+    assert all(
+        sample.value > 30
+        for sample in samples
+    )
+
+
+def test_rca_ignores_candidate_telemetry_outside_lookback_window(
+    db_session,
+    seeded_topology,
+    packet_loss_metric,
+):
+    event = create_event(
+        db_session,
+        seeded_topology,
+        packet_loss_metric,
+    )
+
+    switch = seeded_topology["switch"]
+
+    old_observed_at = (
+        event.occurred_at
+        - timedelta(minutes=10)
+    )
+
+    old_sample = TelemetrySample(
+        asset_id=switch.id,
+        metric_definition_id=packet_loss_metric.id,
+        value=50,
+        observed_at=old_observed_at,
+        received_at=old_observed_at + timedelta(seconds=1),
+        source="edge_gateway",
+        source_sequence=500,
+        quality="good",
+        idempotency_key="rca-old-candidate-sample",
+    )
+
+    db_session.add(old_sample)
+    db_session.flush()
+
+    engine = RCAEngine(db_session)
+
+    result = engine.analyze(event.id)
+
+    switch_candidate = next(
+        candidate
+        for candidate in result.candidates
+        if candidate.identifier == "SW-07"
+    )
+
+    assert switch_candidate.telemetry_support == 0
 
 
 def test_rca_returns_no_root_cause_for_isolated_asset(

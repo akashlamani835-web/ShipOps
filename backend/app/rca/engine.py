@@ -1,14 +1,17 @@
+from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.events.models import OperationalEvent
+from app.events.evaluator import evaluate_rule
+from app.events.models import EventRule, OperationalEvent
 from app.models.asset import Asset
 from app.rca.schemas import (
     RCACandidate,
     RCAResult,
 )
+from app.telemetry.models import TelemetrySample
 from app.topology.service import TopologyService
 
 
@@ -20,6 +23,7 @@ class RCAEngine:
     - asset role
     - topology proximity
     - physical network connectivity
+    - corroborating telemetry from candidate assets
 
     The engine does not use an LLM.
     """
@@ -37,6 +41,8 @@ class RCAEngine:
         "printer": 8.0,
         "service": 20.0,
     }
+
+    TELEMETRY_LOOKBACK_SECONDS = 300
 
     def __init__(
         self,
@@ -74,6 +80,16 @@ class RCAEngine:
         if affected_asset is None:
             raise ValueError(
                 f"Affected asset '{event.asset_id}' not found.",
+            )
+
+        rule = self._db.get(
+            EventRule,
+            event.rule_id,
+        )
+
+        if rule is None:
+            raise ValueError(
+                f"Event rule '{event.rule_id}' not found.",
             )
 
         distances = self._topology.asset_distances(
@@ -128,10 +144,20 @@ class RCAEngine:
                 )
             )
 
+            telemetry_support = (
+                self._count_correlating_telemetry(
+                    asset_id=asset.id,
+                    metric_definition_id=rule.metric_definition_id,
+                    event=event,
+                    rule=rule,
+                )
+            )
+
             score, reasons = self._score_candidate(
                 asset=asset,
                 distance=distance,
                 connectivity_degree=connectivity_degree,
+                telemetry_support=telemetry_support,
             )
 
             candidates.append(
@@ -141,6 +167,7 @@ class RCAEngine:
                     asset_type=asset.asset_type,
                     distance=distance,
                     score=score,
+                    telemetry_support=telemetry_support,
                     reasons=tuple(reasons),
                 )
             )
@@ -148,6 +175,7 @@ class RCAEngine:
         candidates.sort(
             key=lambda candidate: (
                 -candidate.score,
+                -candidate.telemetry_support,
                 candidate.distance,
                 candidate.identifier,
             )
@@ -195,12 +223,59 @@ class RCAEngine:
             candidates=ranked_candidates,
         )
 
+    def _count_correlating_telemetry(
+        self,
+        *,
+        asset_id: UUID,
+        metric_definition_id: UUID,
+        event: OperationalEvent,
+        rule: EventRule,
+    ) -> int:
+        """
+        Count recent candidate telemetry samples that also satisfy
+        the event rule.
+
+        This is intentionally bounded to a short window immediately
+        preceding the event occurrence.
+        """
+
+        start_at = (
+            event.occurred_at
+            - timedelta(
+                seconds=self.TELEMETRY_LOOKBACK_SECONDS,
+            )
+        )
+
+        samples = list(
+            self._db.scalars(
+                select(TelemetrySample)
+                .where(
+                    TelemetrySample.asset_id == asset_id,
+                    TelemetrySample.metric_definition_id
+                    == metric_definition_id,
+                    TelemetrySample.observed_at >= start_at,
+                    TelemetrySample.observed_at
+                    <= event.occurred_at,
+                )
+                .order_by(
+                    TelemetrySample.observed_at,
+                )
+            )
+        )
+
+        return sum(
+            1
+            for sample in samples
+            if evaluate_rule(rule, sample)
+        )
+
     def _score_candidate(
         self,
         *,
         asset: Asset,
         distance: int,
         connectivity_degree: int,
+        telemetry_support: int,
     ) -> tuple[float, list[str]]:
         """Calculate a transparent deterministic candidate score."""
 
@@ -252,6 +327,24 @@ class RCAEngine:
             f"network connectivity "
             f"({connectivity_degree} links, +{connectivity_bonus:.0f})"
         )
+
+        telemetry_bonus = min(
+            30.0,
+            telemetry_support * 10.0,
+        )
+
+        score += telemetry_bonus
+
+        if telemetry_support > 0:
+            reasons.append(
+                f"corroborating telemetry "
+                f"({telemetry_support} matching samples, "
+                f"+{telemetry_bonus:.0f})"
+            )
+        else:
+            reasons.append(
+                "no corroborating candidate telemetry"
+            )
 
         if asset.status.lower() in {
             "offline",
