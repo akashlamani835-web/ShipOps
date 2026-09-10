@@ -6,7 +6,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import Session
 
+from app.api.routes.connectivity import get_connectivity_service
 from app.core.config import get_settings
+from app.core.security import require_api_token
 from app.db.database import get_db
 from app.main import app
 from app.models import (
@@ -22,8 +24,12 @@ from app.models import (
 from app.telemetry.models import MetricDefinition
 
 
+TEST_API_TOKEN = "test-shipops-api-token"
+
+
 def build_test_database_url() -> URL:
     """Build the PostgreSQL URL for the isolated test database."""
+
     application_url = make_url(get_settings().database_url)
 
     return application_url.set(
@@ -34,6 +40,7 @@ def build_test_database_url() -> URL:
 @pytest.fixture(scope="session")
 def test_engine():
     """Create the isolated PostgreSQL test engine."""
+
     engine = create_engine(
         build_test_database_url(),
         pool_pre_ping=True,
@@ -50,6 +57,7 @@ def test_engine():
 @pytest.fixture
 def db_session(test_engine) -> Generator[Session, None, None]:
     """Provide a transaction-isolated PostgreSQL session."""
+
     connection = test_engine.connect()
     transaction = connection.begin()
 
@@ -71,7 +79,9 @@ def db_session(test_engine) -> Generator[Session, None, None]:
 
 
 @pytest.fixture
-def seeded_topology(db_session: Session) -> dict[str, Asset]:
+def seeded_topology(
+    db_session: Session,
+) -> dict[str, Asset]:
     """Create the deterministic topology used by integration tests."""
 
     organization = Organization(
@@ -328,7 +338,9 @@ def seeded_topology(db_session: Session) -> dict[str, Asset]:
 
 
 @pytest.fixture
-def packet_loss_metric(db_session: Session) -> MetricDefinition:
+def packet_loss_metric(
+    db_session: Session,
+) -> MetricDefinition:
     """Create the packet-loss metric used by telemetry tests."""
 
     metric = MetricDefinition(
@@ -345,6 +357,27 @@ def packet_loss_metric(db_session: Session) -> MetricDefinition:
     db_session.flush()
 
     return metric
+
+
+@pytest.fixture(autouse=True)
+def override_authentication():
+    """
+    Override API authentication for the existing automated test suite.
+
+    Dedicated security tests temporarily remove this override when they
+    need to exercise the real authentication dependency.
+    """
+
+    app.dependency_overrides[require_api_token] = (
+        lambda: TEST_API_TOKEN
+    )
+
+    yield
+
+    app.dependency_overrides.pop(
+        require_api_token,
+        None,
+    )
 
 
 @pytest.fixture
@@ -364,4 +397,7 @@ def api_client(
         with TestClient(app) as client:
             yield client
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(
+            get_db,
+            None,
+        )

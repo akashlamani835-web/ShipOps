@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     database_url: str
     redis_url: str
+    api_token: str
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -23,4 +24,5 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     """Return a cached application settings instance."""
+
     return Settings()

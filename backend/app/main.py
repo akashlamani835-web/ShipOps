@@ -8,6 +8,20 @@ from app.core.redis import check_redis_health
 from app.db.database import check_database_health
 
 
+def configure_logging() -> None:
+    """Configure application-wide logging for ShipOps."""
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format=(
+            "%(asctime)s | %(levelname)s | "
+            "%(name)s | %(message)s"
+        ),
+    )
+
+
+configure_logging()
+
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
@@ -22,6 +36,9 @@ app.include_router(api_router)
 @app.get("/live")
 def liveness() -> dict[str, str]:
     """Confirm that the application process is alive."""
+
+    logger.info("Liveness check requested")
+
     return {
         "status": "alive",
         "service": settings.app_name,
@@ -35,6 +52,7 @@ def readiness(response: Response) -> dict:
 
     Returns HTTP 503 when a required dependency is unavailable.
     """
+
     postgres_healthy = check_database_health()
     redis_healthy = check_redis_health()
 
@@ -42,6 +60,14 @@ def readiness(response: Response) -> dict:
 
     if not ready:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+        logger.warning(
+            "Readiness check failed: postgres=%s redis=%s",
+            postgres_healthy,
+            redis_healthy,
+        )
+    else:
+        logger.info("Readiness check passed")
 
     return {
         "status": "ready" if ready else "not_ready",
@@ -57,18 +83,34 @@ def readiness(response: Response) -> dict:
 @app.get("/health")
 def health() -> dict:
     """Return detailed application and dependency health."""
+
     postgres_healthy = check_database_health()
     redis_healthy = check_redis_health()
 
     dependencies_healthy = postgres_healthy and redis_healthy
-    overall_status = "healthy" if dependencies_healthy else "degraded"
+    overall_status = (
+        "healthy"
+        if dependencies_healthy
+        else "degraded"
+    )
+
+    logger.info(
+        "Health check completed: status=%s postgres=%s redis=%s",
+        overall_status,
+        postgres_healthy,
+        redis_healthy,
+    )
 
     return {
         "status": overall_status,
         "service": settings.app_name,
         "environment": settings.app_env,
         "dependencies": {
-            "postgres": "healthy" if postgres_healthy else "unhealthy",
-            "redis": "healthy" if redis_healthy else "unhealthy",
+            "postgres": "healthy"
+            if postgres_healthy
+            else "unhealthy",
+            "redis": "healthy"
+            if redis_healthy
+            else "unhealthy",
         },
     }
