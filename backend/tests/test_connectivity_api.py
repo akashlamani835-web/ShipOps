@@ -133,3 +133,66 @@ def test_submitted_bulk_traffic_appears_in_status_queue():
 
     assert len(body["queued_traffic"]) == 1
     assert body["queued_traffic"][0]["traffic_id"] == "backup-002"
+
+
+def test_update_link_to_degraded_state():
+    reset_connectivity_service()
+
+    response = client.post(
+        "/connectivity/link",
+        params={
+            "state": "degraded",
+            "available_kbps": 300,
+        },
+    )
+
+    assert response.status_code == 200
+
+    body = response.json()
+
+    assert body["name"] == "satellite-link"
+    assert body["state"] == "degraded"
+    assert body["capacity_kbps"] == 1_000
+    assert body["available_kbps"] == 300
+
+
+def test_update_link_to_unavailable_state():
+    reset_connectivity_service()
+
+    response = client.post(
+        "/connectivity/link",
+        params={
+            "state": "unavailable",
+            "available_kbps": 0,
+        },
+    )
+
+    assert response.status_code == 200
+
+    body = response.json()
+
+    assert body["state"] == "unavailable"
+    assert body["available_kbps"] == 0
+
+
+def test_link_update_persists_across_status_requests():
+    reset_connectivity_service()
+
+    update_response = client.post(
+        "/connectivity/link",
+        params={
+            "state": "degraded",
+            "available_kbps": 250,
+        },
+    )
+
+    assert update_response.status_code == 200
+
+    status_response = client.get("/connectivity/status")
+
+    assert status_response.status_code == 200
+
+    body = status_response.json()
+
+    assert body["link"]["state"] == "degraded"
+    assert body["link"]["available_kbps"] == 250

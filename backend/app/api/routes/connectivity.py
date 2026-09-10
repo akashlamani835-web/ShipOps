@@ -85,3 +85,35 @@ def submit_traffic(request: TrafficRequest) -> dict:
         "allocated_kbps": decision.allocated_kbps,
         "reason": decision.reason,
     }
+
+
+@router.post("/link")
+def update_connectivity_link(
+    state: ConnectivityState,
+    available_kbps: int,
+) -> dict:
+    """
+    Update the simulated external connectivity link.
+
+    This endpoint allows the demonstration environment to simulate
+    available, degraded, and unavailable connectivity conditions.
+    """
+
+    if available_kbps < 0:
+        raise ValueError(
+            "Available bandwidth cannot be negative.",
+        )
+
+    service = get_connectivity_service()
+
+    link = service.update_link(
+        state=state,
+        available_kbps=available_kbps,
+    )
+
+    return {
+        "name": link.name,
+        "state": link.state.value,
+        "capacity_kbps": link.capacity_kbps,
+        "available_kbps": link.available_kbps,
+    }
