@@ -317,3 +317,59 @@ def test_retry_keeps_traffic_queued_when_connectivity_remains_unavailable():
     assert body["decisions"][0]["action"] == "queue"
     assert body["decisions"][0]["allocated_kbps"] == 0
     assert body["queued_traffic_count"] == 1
+
+
+def test_run_connectivity_simulation_returns_full_scenario():
+    reset_connectivity_service()
+
+    response = client.post("/connectivity/simulate")
+
+    assert response.status_code == 200
+
+    body = response.json()
+
+    assert body["initial_state"] == "available"
+    assert body["degraded_state"] == "degraded"
+    assert body["outage_state"] == "unavailable"
+    assert body["recovered_state"] == "available"
+
+
+def test_run_connectivity_simulation_returns_expected_actions():
+    reset_connectivity_service()
+
+    response = client.post("/connectivity/simulate")
+
+    assert response.status_code == 200
+
+    body = response.json()
+
+    assert body["critical_action_during_degradation"] == "transmit"
+    assert body["bulk_action_during_degradation"] == "queue"
+    assert body["outage_queued_requests"] == 1
+    assert body["recovered_transmitted_requests"] == 2
+    assert body["final_queued_requests"] == 0
+
+
+def test_simulation_does_not_modify_persistent_api_service_state():
+    reset_connectivity_service()
+
+    response = client.post("/connectivity/simulate")
+
+    assert response.status_code == 200
+
+    status_response = client.get("/connectivity/status")
+
+    assert status_response.status_code == 200
+
+    body = status_response.json()
+
+    assert body["link"]["state"] == "available"
+    assert body["link"]["available_kbps"] == 750
+    assert body["queued_traffic"] == []
+    assert body["usage"] == {
+        "requests": 0,
+        "transmitted_kbps": 0,
+        "throttled_kbps": 0,
+        "queued_requests": 0,
+        "queued_kbps": 0,
+    }

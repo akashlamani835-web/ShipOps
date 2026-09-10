@@ -6,6 +6,7 @@ from app.connectivity.models import (
     TrafficRequest,
 )
 from app.connectivity.service import ConnectivityService
+from app.connectivity.simulation import ConnectivitySimulation
 
 
 router = APIRouter(
@@ -143,4 +144,36 @@ def retry_connectivity_queue() -> dict:
             for decision in decisions
         ],
         "queued_traffic_count": len(service.queued_traffic()),
+    }
+
+
+@router.post("/simulate")
+def run_connectivity_simulation() -> dict:
+    """
+    Run the deterministic end-to-end connectivity resilience scenario.
+
+    The simulation uses its own isolated connectivity service and therefore
+    does not modify the state of the API's persistent connectivity service.
+    """
+
+    result = ConnectivitySimulation().run()
+
+    return {
+        "initial_state": result.initial_state.value,
+        "degraded_state": result.degraded_state.value,
+        "outage_state": result.outage_state.value,
+        "recovered_state": result.recovered_state.value,
+        "critical_action_during_degradation": (
+            result.critical_action_during_degradation
+        ),
+        "bulk_action_during_degradation": (
+            result.bulk_action_during_degradation
+        ),
+        "outage_queued_requests": result.outage_queued_requests,
+        "recovered_transmitted_requests": (
+            result.recovered_transmitted_requests
+        ),
+        "final_queued_requests": result.final_queued_requests,
+        "transmitted_kbps": result.transmitted_kbps,
+        "queued_kbps": result.queued_kbps,
     }
