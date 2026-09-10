@@ -71,7 +71,7 @@ def test_critical_traffic_is_throttled_when_bandwidth_is_insufficient():
     assert decision.allocated_kbps == 200
 
 
-def test_bulk_traffic_is_always_queued_by_policy():
+def test_bulk_traffic_is_queued_when_connectivity_is_degraded():
     policy = ConnectivityPolicy()
     request = build_request(
         traffic_class=TrafficClass.BULK,
@@ -79,12 +79,34 @@ def test_bulk_traffic_is_always_queued_by_policy():
     )
 
     decision = policy.decide(
-        link=build_link(available_kbps=500),
+        link=build_link(
+            state=ConnectivityState.DEGRADED,
+            available_kbps=500,
+        ),
         request=request,
     )
 
     assert decision.action == TrafficAction.QUEUE.value
     assert decision.allocated_kbps == 0
+
+
+def test_bulk_traffic_is_transmitted_when_connectivity_is_healthy():
+    policy = ConnectivityPolicy()
+    request = build_request(
+        traffic_class=TrafficClass.BULK,
+        required_kbps=100,
+    )
+
+    decision = policy.decide(
+        link=build_link(
+            state=ConnectivityState.AVAILABLE,
+            available_kbps=500,
+        ),
+        request=request,
+    )
+
+    assert decision.action == TrafficAction.TRANSMIT.value
+    assert decision.allocated_kbps == 100
 
 
 def test_unavailable_connectivity_queues_traffic():
@@ -147,7 +169,10 @@ def test_scheduler_does_not_override_policy_bulk_decision():
     )
 
     policy_decision = policy.decide(
-        link=build_link(available_kbps=500),
+        link=build_link(
+            state=ConnectivityState.DEGRADED,
+            available_kbps=500,
+        ),
         request=request,
     )
 
@@ -162,7 +187,10 @@ def test_scheduler_does_not_override_policy_bulk_decision():
 
 def test_service_submit_uses_policy_for_single_request():
     service = ConnectivityService(
-        link=build_link(available_kbps=500),
+        link=build_link(
+            state=ConnectivityState.DEGRADED,
+            available_kbps=500,
+        ),
     )
 
     request = build_request(
@@ -185,7 +213,7 @@ def test_service_submit_uses_policy_for_single_request():
         (TrafficClass.HIGH, TrafficAction.TRANSMIT.value),
         (TrafficClass.NORMAL, TrafficAction.TRANSMIT.value),
         (TrafficClass.LOW, TrafficAction.TRANSMIT.value),
-        (TrafficClass.BULK, TrafficAction.QUEUE.value),
+        (TrafficClass.BULK, TrafficAction.TRANSMIT.value),
     ],
 )
 def test_policy_has_deterministic_action_by_traffic_class(

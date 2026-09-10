@@ -87,8 +87,18 @@ def test_submit_critical_traffic_returns_transmit_decision():
     assert body["allocated_kbps"] == 100
 
 
-def test_submit_bulk_traffic_is_queued():
+def test_submit_bulk_traffic_is_queued_when_connectivity_is_degraded():
     reset_connectivity_service()
+
+    link_response = client.post(
+        "/connectivity/link",
+        params={
+            "state": "degraded",
+            "available_kbps": 300,
+        },
+    )
+
+    assert link_response.status_code == 200
 
     response = client.post(
         "/connectivity/traffic",
@@ -112,6 +122,16 @@ def test_submit_bulk_traffic_is_queued():
 
 def test_submitted_bulk_traffic_appears_in_status_queue():
     reset_connectivity_service()
+
+    link_response = client.post(
+        "/connectivity/link",
+        params={
+            "state": "degraded",
+            "available_kbps": 300,
+        },
+    )
+
+    assert link_response.status_code == 200
 
     response = client.post(
         "/connectivity/traffic",

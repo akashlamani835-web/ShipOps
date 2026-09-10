@@ -14,7 +14,8 @@ class ConnectivityPolicy:
     Deterministic bandwidth-allocation policy for constrained links.
 
     Higher-priority traffic receives bandwidth before lower-priority
-    traffic. Bulk traffic is queued when the link is constrained.
+    traffic. Bulk traffic is deferred while connectivity is degraded
+    or unavailable, but can transmit when healthy connectivity is restored.
     """
 
     _PRIORITY_ORDER = (
@@ -180,14 +181,56 @@ class ConnectivityPolicy:
         link: ConnectivityLink,
         request: TrafficRequest,
     ) -> TrafficDecision:
+        if link.state == ConnectivityState.DEGRADED:
+            return TrafficDecision(
+                traffic_id=request.traffic_id,
+                traffic_class=request.traffic_class,
+                action=TrafficAction.QUEUE.value,
+                allocated_kbps=0,
+                reason=(
+                    "Bulk traffic is deferred while connectivity "
+                    "is degraded."
+                ),
+            )
+
+        if link.available_kbps <= 0:
+            return TrafficDecision(
+                traffic_id=request.traffic_id,
+                traffic_class=request.traffic_class,
+                action=TrafficAction.QUEUE.value,
+                allocated_kbps=0,
+                reason=(
+                    "No bandwidth is currently available; "
+                    "bulk traffic is queued locally."
+                ),
+            )
+
+        allocation = min(
+            request.required_kbps,
+            link.available_kbps,
+        )
+
+        if allocation < request.required_kbps:
+            return TrafficDecision(
+                traffic_id=request.traffic_id,
+                traffic_class=request.traffic_class,
+                action=TrafficAction.QUEUE.value,
+                allocated_kbps=0,
+                reason=(
+                    "Bulk traffic is deferred because the healthy "
+                    "link does not currently have enough bandwidth "
+                    "for the requested transfer rate."
+                ),
+            )
+
         return TrafficDecision(
             traffic_id=request.traffic_id,
             traffic_class=request.traffic_class,
-            action=TrafficAction.QUEUE.value,
-            allocated_kbps=0,
+            action=TrafficAction.TRANSMIT.value,
+            allocated_kbps=allocation,
             reason=(
-                "Bulk traffic is deferred to preserve bandwidth "
-                "for operational traffic."
+                "Healthy connectivity is available; deferred bulk "
+                "traffic can resume transmission."
             ),
         )
 

@@ -78,7 +78,7 @@ def test_bulk_traffic_is_queued_during_connectivity_management():
 
     decision = policy.decide(
         link=build_link(
-            state=ConnectivityState.AVAILABLE,
+            state=ConnectivityState.DEGRADED,
             available_kbps=2000,
         ),
         request=request,
@@ -86,6 +86,28 @@ def test_bulk_traffic_is_queued_during_connectivity_management():
 
     assert decision.action == "queue"
     assert decision.allocated_kbps == 0
+
+
+def test_bulk_traffic_transmits_when_healthy_connectivity_is_available():
+    policy = ConnectivityPolicy()
+
+    request = TrafficRequest(
+        traffic_id="bulk-002",
+        traffic_class=TrafficClass.BULK,
+        size_kb=500,
+        required_kbps=500,
+    )
+
+    decision = policy.decide(
+        link=build_link(
+            state=ConnectivityState.AVAILABLE,
+            available_kbps=2000,
+        ),
+        request=request,
+    )
+
+    assert decision.action == "transmit"
+    assert decision.allocated_kbps == 500
 
 
 def test_low_priority_traffic_is_throttled_when_link_is_degraded():
