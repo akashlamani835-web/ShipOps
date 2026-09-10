@@ -18,8 +18,12 @@ class ConnectivityScheduler:
     """
     Deterministic scheduler for competing traffic requests.
 
-    Traffic is ordered primarily by operational priority and then by
-    deadline. Available bandwidth is consumed in that order.
+    The scheduler is responsible only for:
+    - ordering requests
+    - allocating available bandwidth
+
+    Traffic-policy decisions such as whether bulk traffic should be
+    transmitted or deferred remain the responsibility of ConnectivityPolicy.
     """
 
     _PRIORITY_ORDER = {
@@ -37,16 +41,15 @@ class ConnectivityScheduler:
         requests: list[TrafficRequest],
     ) -> list[ScheduledTraffic]:
         """
-        Produce a deterministic transmission schedule.
+        Produce a deterministic resource-allocation schedule.
 
-        A request receives up to its required bandwidth. Requests that
-        cannot receive any bandwidth remain queued.
+        The scheduler does not decide whether a traffic class is allowed
+        to transmit. It only determines how much bandwidth each request
+        could receive based on priority ordering and remaining capacity.
         """
 
         if available_kbps < 0:
-            raise ValueError(
-                "Available bandwidth cannot be negative.",
-            )
+            raise ValueError("Available bandwidth cannot be negative.")
 
         ordered_requests = sorted(
             requests,
@@ -113,9 +116,7 @@ class ConnectivityScheduler:
         self,
         requests: list[TrafficRequest],
     ) -> TrafficRequest | None:
-        """
-        Return the request that should be considered next.
-        """
+        """Return the request that should be considered next."""
 
         if not requests:
             return None
@@ -128,7 +129,7 @@ class ConnectivityScheduler:
     def _sort_key(
         self,
         request: TrafficRequest,
-    ) -> tuple[int, int, str]:
+    ) -> tuple[int, int, float, str]:
         """
         Sort by priority, then deadline, then traffic ID.
 
