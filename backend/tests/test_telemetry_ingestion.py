@@ -1,10 +1,16 @@
 from datetime import datetime, timedelta, timezone
-from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.events.models import (
+    EventEvidence,
+    EventRule,
+    EventSeverity,
+    EventStatus,
+    OperationalEvent,
+)
 from app.telemetry.models import TelemetrySample
 from app.telemetry.schemas import TelemetryIngestRequest
 from app.telemetry.service import TelemetryIngestionService
@@ -38,7 +44,7 @@ def build_request(
         observed_at = base_time
 
     if received_at is None:
-        received_at = base_time + timedelta(seconds=2)
+        received_at = observed_at + timedelta(seconds=2)
 
     return TelemetryIngestRequest(
         asset_identifier="SW-07",
@@ -51,6 +57,29 @@ def build_request(
         source_sequence=source_sequence,
         quality=quality,
         idempotency_key=idempotency_key,
+    )
+
+
+def build_event_rule(
+    metric_id,
+    *,
+    duration_seconds: int = 180,
+    threshold: float = 30,
+    active: bool = True,
+) -> EventRule:
+    """Build a deterministic packet-loss event rule."""
+
+    return EventRule(
+        code="packet_loss_high",
+        name="High Packet Loss",
+        event_type="NETWORK_DEGRADATION",
+        metric_definition_id=metric_id,
+        operator=">",
+        threshold=threshold,
+        duration_seconds=duration_seconds,
+        severity=EventSeverity.HIGH,
+        active=active,
+        description="Detect sustained packet loss.",
     )
 
 
@@ -331,39 +360,288 @@ def test_out_of_order_sequence_is_accepted(
     assert count == 2
 
 
-def test_event_engine_is_triggered_after_telemetry_persistence(
+def test_event_engine_creates_real_event_after_sustained_telemetry(
     db_session: Session,
     seeded_topology,
     packet_loss_metric,
 ):
-    """A persisted telemetry sample is forwarded to the event engine."""
+    """
+    Telemetry ingestion automatically invokes the real EventService.
+
+    Three telemetry samples remain above the event threshold for the
+    required duration, causing a real OperationalEvent and evidence
+    records to be created.
+    """
 
     asset = seeded_topology["switch"]
 
-    event_service = Mock()
-
-    service = TelemetryIngestionService(
-        db_session,
-        event_service=event_service,
+    rule = build_event_rule(
+        packet_loss_metric.id,
+        duration_seconds=180,
+        threshold=30,
     )
 
-    request = build_request(
+    db_session.add(rule)
+    db_session.flush()
+
+    start = datetime(
+        2026,
+        9,
+        9,
+        12,
+        0,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    service = TelemetryIngestionService(db_session)
+
+    requests = [
+        build_request(
+            value=38,
+            observed_at=start,
+            received_at=start + timedelta(seconds=2),
+            idempotency_key="event-e2e-001",
+            source_sequence=1,
+        ),
+        build_request(
+            value=41,
+            observed_at=start + timedelta(minutes=1),
+            received_at=start + timedelta(minutes=1, seconds=2),
+            idempotency_key="event-e2e-002",
+            source_sequence=2,
+        ),
+        build_request(
+            value=37,
+            observed_at=start + timedelta(minutes=3),
+            received_at=start + timedelta(minutes=3, seconds=2),
+            idempotency_key="event-e2e-003",
+            source_sequence=3,
+        ),
+    ]
+
+    results = [
+        service.ingest(request)
+        for request in requests
+    ]
+
+    assert all(
+        result.status == "accepted"
+        for result in results
+    )
+
+    assert all(
+        result.idempotent_replay is False
+        for result in results
+    )
+
+    event = db_session.scalar(
+        select(OperationalEvent).where(
+            OperationalEvent.rule_id == rule.id,
+            OperationalEvent.asset_id == asset.id,
+        )
+    )
+
+    assert event is not None
+    assert event.status == EventStatus.OPEN
+    assert event.event_type == "NETWORK_DEGRADATION"
+    assert event.severity == EventSeverity.HIGH
+    assert event.occurred_at == start + timedelta(minutes=3)
+
+    evidence = list(
+        db_session.scalars(
+            select(EventEvidence)
+            .where(
+                EventEvidence.event_id == event.id,
+            )
+            .order_by(EventEvidence.telemetry_sample_id)
+        )
+    )
+
+    assert len(evidence) == 3
+
+    evidence_sample_ids = {
+        item.telemetry_sample_id
+        for item in evidence
+    }
+
+    telemetry_samples = list(
+        db_session.scalars(
+            select(TelemetrySample)
+            .where(
+                TelemetrySample.asset_id == asset.id,
+                TelemetrySample.idempotency_key.in_(
+                    [
+                        "event-e2e-001",
+                        "event-e2e-002",
+                        "event-e2e-003",
+                    ]
+                ),
+            )
+        )
+    )
+
+    assert len(telemetry_samples) == 3
+
+    assert evidence_sample_ids == {
+        sample.id
+        for sample in telemetry_samples
+    }
+
+
+def test_event_engine_does_not_create_event_before_duration_is_met(
+    db_session: Session,
+    seeded_topology,
+    packet_loss_metric,
+):
+    """A threshold breach shorter than the required duration creates no event."""
+
+    rule = build_event_rule(
+        packet_loss_metric.id,
+        duration_seconds=180,
+        threshold=30,
+    )
+
+    db_session.add(rule)
+    db_session.flush()
+
+    start = datetime(
+        2026,
+        9,
+        9,
+        12,
+        0,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    service = TelemetryIngestionService(db_session)
+
+    requests = [
+        build_request(
+            value=40,
+            observed_at=start,
+            received_at=start + timedelta(seconds=2),
+            idempotency_key="no-event-e2e-001",
+            source_sequence=1,
+        ),
+        build_request(
+            value=42,
+            observed_at=start + timedelta(minutes=1),
+            received_at=start + timedelta(minutes=1, seconds=2),
+            idempotency_key="no-event-e2e-002",
+            source_sequence=2,
+        ),
+        build_request(
+            value=41,
+            observed_at=start + timedelta(minutes=2),
+            received_at=start + timedelta(minutes=2, seconds=2),
+            idempotency_key="no-event-e2e-003",
+            source_sequence=3,
+        ),
+    ]
+
+    for request in requests:
+        result = service.ingest(request)
+        assert result.status == "accepted"
+
+    event_count = db_session.scalar(
+        select(func.count())
+        .select_from(OperationalEvent)
+        .where(
+            OperationalEvent.rule_id == rule.id,
+        )
+    )
+
+    assert event_count == 0
+
+
+def test_duplicate_telemetry_does_not_create_duplicate_event(
+    db_session: Session,
+    seeded_topology,
+    packet_loss_metric,
+):
+    """Idempotent telemetry replay does not create duplicate events."""
+
+    asset = seeded_topology["switch"]
+
+    rule = build_event_rule(
+        packet_loss_metric.id,
+        duration_seconds=180,
+        threshold=30,
+    )
+
+    db_session.add(rule)
+    db_session.flush()
+
+    start = datetime(
+        2026,
+        9,
+        9,
+        12,
+        0,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    service = TelemetryIngestionService(db_session)
+
+    first_request = build_request(
         value=38,
-        idempotency_key="event-integration-500",
-        source_sequence=500,
+        observed_at=start,
+        received_at=start + timedelta(seconds=2),
+        idempotency_key="duplicate-event-e2e-001",
+        source_sequence=1,
     )
 
-    result = service.ingest(request)
-
-    assert result.status == "accepted"
-    assert result.idempotent_replay is False
-
-    event_service.process_sample.assert_called_once()
-
-    persisted_sample = (
-        event_service.process_sample.call_args.args[0]
+    second_request = build_request(
+        value=41,
+        observed_at=start + timedelta(minutes=1),
+        received_at=start + timedelta(minutes=1, seconds=2),
+        idempotency_key="duplicate-event-e2e-002",
+        source_sequence=2,
     )
 
-    assert str(persisted_sample.asset_id) == str(asset.id)
-    assert persisted_sample.value == 38
-    assert persisted_sample.source_sequence == 500
+    third_request = build_request(
+        value=37,
+        observed_at=start + timedelta(minutes=3),
+        received_at=start + timedelta(minutes=3, seconds=2),
+        idempotency_key="duplicate-event-e2e-003",
+        source_sequence=3,
+    )
+
+    first_result = service.ingest(first_request)
+    second_result = service.ingest(second_request)
+    third_result = service.ingest(third_request)
+
+    assert first_result.idempotent_replay is False
+    assert second_result.idempotent_replay is False
+    assert third_result.idempotent_replay is False
+
+    replay_result = service.ingest(
+        third_request.model_copy(
+            update={
+                "value": 99,
+            }
+        )
+    )
+
+    assert replay_result.idempotent_replay is True
+    assert replay_result.telemetry_id == third_result.telemetry_id
+
+    event_count = db_session.scalar(
+        select(func.count())
+        .select_from(OperationalEvent)
+        .where(
+            OperationalEvent.rule_id == rule.id,
+            OperationalEvent.asset_id == asset.id,
+            OperationalEvent.status.in_(
+                [
+                    EventStatus.OPEN,
+                    EventStatus.ACKNOWLEDGED,
+                ]
+            ),
+        )
+    )
+
+    assert event_count == 1
