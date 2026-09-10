@@ -19,12 +19,16 @@ def create_event(
     db_session,
     seeded_topology,
     packet_loss_metric,
+    *,
+    asset_key: str = "pos1",
+    rule_code: str = "rca_packet_loss_rule",
+    observed_at: datetime | None = None,
 ):
-    """Create an event on POS-07-01 for RCA testing."""
+    """Create an event for RCA testing."""
 
     rule = EventRule(
-        code="rca_packet_loss_rule",
-        name="RCA Packet Loss Rule",
+        code=rule_code,
+        name=f"RCA Rule {rule_code}",
         event_type="NETWORK_DEGRADATION",
         metric_definition_id=packet_loss_metric.id,
         operator=">",
@@ -38,15 +42,10 @@ def create_event(
     db_session.add(rule)
     db_session.flush()
 
-    pos = seeded_topology["pos1"]
+    asset = seeded_topology[asset_key]
 
-    event = OperationalEvent(
-        asset_id=pos.id,
-        rule_id=rule.id,
-        event_type="NETWORK_DEGRADATION",
-        severity=EventSeverity.HIGH,
-        status=EventStatus.OPEN,
-        occurred_at=datetime(
+    if observed_at is None:
+        observed_at = datetime(
             2026,
             9,
             10,
@@ -54,8 +53,18 @@ def create_event(
             0,
             0,
             tzinfo=timezone.utc,
+        )
+
+    event = OperationalEvent(
+        asset_id=asset.id,
+        rule_id=rule.id,
+        event_type="NETWORK_DEGRADATION",
+        severity=EventSeverity.HIGH,
+        status=EventStatus.OPEN,
+        occurred_at=observed_at,
+        summary=(
+            f"Packet loss detected on {asset.identifier}."
         ),
-        summary="Packet loss detected on POS-07-01.",
         details={
             "rule_code": rule.code,
             "threshold": 30,
@@ -74,18 +83,21 @@ def add_candidate_telemetry(
     asset,
     metric,
     values: list[float],
+    event_time: datetime | None = None,
+    key_prefix: str = "rca-candidate",
 ):
     """Add candidate telemetry immediately before the event."""
 
-    event_time = datetime(
-        2026,
-        9,
-        10,
-        10,
-        0,
-        0,
-        tzinfo=timezone.utc,
-    )
+    if event_time is None:
+        event_time = datetime(
+            2026,
+            9,
+            10,
+            10,
+            0,
+            0,
+            tzinfo=timezone.utc,
+        )
 
     samples = []
 
@@ -108,7 +120,7 @@ def add_candidate_telemetry(
                 source_sequence=100 + index,
                 quality="good",
                 idempotency_key=(
-                    f"rca-candidate-{asset.identifier}-{index}"
+                    f"{key_prefix}-{asset.identifier}-{index}"
                 ),
             )
         )
@@ -325,3 +337,151 @@ def test_rca_unknown_event_is_rejected(
         match="not found",
     ):
         engine.analyze(missing_event_id)
+
+
+def test_cluster_rca_identifies_common_upstream_switch(
+    db_session,
+    seeded_topology,
+    packet_loss_metric,
+):
+    event_time = datetime(
+        2026,
+        9,
+        10,
+        10,
+        0,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    event_one = create_event(
+        db_session,
+        seeded_topology,
+        packet_loss_metric,
+        asset_key="pos1",
+        rule_code="cluster_rule_pos1",
+        observed_at=event_time,
+    )
+
+    event_two = create_event(
+        db_session,
+        seeded_topology,
+        packet_loss_metric,
+        asset_key="pos2",
+        rule_code="cluster_rule_pos2",
+        observed_at=event_time,
+    )
+
+    engine = RCAEngine(db_session)
+
+    result = engine.analyze_cluster(
+        [
+            event_one.id,
+            event_two.id,
+        ]
+    )
+
+    assert result.root_cause_identifier == "SW-07"
+    assert result.confidence > 0.50
+
+    switch_candidate = result.candidates[0]
+
+    assert switch_candidate.identifier == "SW-07"
+    assert switch_candidate.shared_event_support == 2
+
+    assert any(
+        "shared impact across 2 affected assets"
+        in reason
+        for reason in switch_candidate.reasons
+    )
+
+
+def test_cluster_rca_increases_support_for_shared_candidate(
+    db_session,
+    seeded_topology,
+    packet_loss_metric,
+):
+    event_time = datetime(
+        2026,
+        9,
+        10,
+        10,
+        0,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    event_one = create_event(
+        db_session,
+        seeded_topology,
+        packet_loss_metric,
+        asset_key="pos1",
+        rule_code="cluster_compare_rule_1",
+        observed_at=event_time,
+    )
+
+    event_two = create_event(
+        db_session,
+        seeded_topology,
+        packet_loss_metric,
+        asset_key="pos2",
+        rule_code="cluster_compare_rule_2",
+        observed_at=event_time,
+    )
+
+    engine = RCAEngine(db_session)
+
+    single_result = engine.analyze(event_one.id)
+
+    cluster_result = engine.analyze_cluster(
+        [
+            event_one.id,
+            event_two.id,
+        ]
+    )
+
+    single_switch = next(
+        candidate
+        for candidate in single_result.candidates
+        if candidate.identifier == "SW-07"
+    )
+
+    cluster_switch = next(
+        candidate
+        for candidate in cluster_result.candidates
+        if candidate.identifier == "SW-07"
+    )
+
+    assert cluster_switch.shared_event_support == 2
+    assert (
+        cluster_switch.score
+        > single_switch.score
+    )
+
+
+def test_cluster_rca_requires_at_least_one_event(
+    db_session,
+):
+    engine = RCAEngine(db_session)
+
+    with pytest.raises(
+        ValueError,
+        match="At least one event ID",
+    ):
+        engine.analyze_cluster([])
+
+
+def test_cluster_rca_rejects_unknown_event(
+    db_session,
+):
+    engine = RCAEngine(db_session)
+
+    missing_event_id = uuid4()
+
+    with pytest.raises(
+        ValueError,
+        match="not found",
+    ):
+        engine.analyze_cluster(
+            [missing_event_id]
+        )

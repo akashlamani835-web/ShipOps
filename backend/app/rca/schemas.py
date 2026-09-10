@@ -14,6 +14,7 @@ class RCACandidate:
     distance: int
     score: float
     telemetry_support: int
+    shared_event_support: int
     reasons: tuple[str, ...]
 
 
@@ -24,6 +25,21 @@ class RCAResult:
     event_id: UUID
     affected_asset_id: UUID
     affected_asset_identifier: str
+    root_cause_asset_id: UUID | None
+    root_cause_identifier: str | None
+    confidence: float
+    severity: EventSeverity
+    explanation: str
+    candidates: tuple[RCACandidate, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RCAClusterResult:
+    """Deterministic RCA result across multiple operational events."""
+
+    event_ids: tuple[UUID, ...]
+    affected_asset_ids: tuple[UUID, ...]
+    affected_asset_identifiers: tuple[str, ...]
     root_cause_asset_id: UUID | None
     root_cause_identifier: str | None
     confidence: float
