@@ -29,12 +29,14 @@ class TopologyService:
         self._asset_to_nodes: dict[str, set[str]] = {}
 
         for node in nodes:
-            self._asset_to_nodes.setdefault(node.asset_id, set()).add(
-                node.id
-            )
+            self._asset_to_nodes.setdefault(
+                node.asset_id,
+                set(),
+            ).add(node.id)
 
         self._adjacency: dict[str, set[str]] = {
-            node.id: set() for node in nodes
+            node.id: set()
+            for node in nodes
         }
 
         for edge in edges:
@@ -86,6 +88,85 @@ class TopologyService:
         return self._traverse_from_nodes(
             self._asset_to_nodes[asset_id],
             excluded_asset_ids={asset_id},
+        )
+
+    def asset_distances(
+        self,
+        asset_id: str,
+    ) -> dict[str, int]:
+        """
+        Return shortest physical-topology distance to reachable assets.
+
+        Distance is measured in interface-to-interface hops and then
+        converted to asset-level candidates. The supplied asset is
+        excluded from the result.
+        """
+        start_nodes = self._asset_to_nodes.get(asset_id)
+
+        if not start_nodes:
+            return {}
+
+        queue: deque[tuple[str, int]] = deque()
+        visited_nodes: set[str] = set()
+
+        for node_id in start_nodes:
+            queue.append((node_id, 0))
+            visited_nodes.add(node_id)
+
+        distances: dict[str, int] = {}
+
+        while queue:
+            current_node_id, distance = queue.popleft()
+
+            for neighbor_id in self._adjacency[current_node_id]:
+                if neighbor_id in visited_nodes:
+                    continue
+
+                visited_nodes.add(neighbor_id)
+
+                neighbor = self._nodes[neighbor_id]
+                next_distance = distance + 1
+                neighbor_asset_id = neighbor.asset_id
+
+                if neighbor_asset_id != asset_id:
+                    existing_distance = distances.get(
+                        neighbor_asset_id,
+                    )
+
+                    if (
+                        existing_distance is None
+                        or next_distance < existing_distance
+                    ):
+                        distances[neighbor_asset_id] = next_distance
+
+                queue.append(
+                    (
+                        neighbor_id,
+                        next_distance,
+                    )
+                )
+
+        return distances
+
+    def asset_connectivity_degree(
+        self,
+        asset_id: str,
+    ) -> int:
+        """
+        Return the number of active physical links touching an asset.
+
+        Higher connectivity indicates that the asset participates in
+        more physical network relationships and can therefore be a
+        stronger root-cause candidate for infrastructure events.
+        """
+        node_ids = self._asset_to_nodes.get(asset_id)
+
+        if not node_ids:
+            return 0
+
+        return sum(
+            len(self._adjacency[node_id])
+            for node_id in node_ids
         )
 
     def _traverse_from_nodes(
