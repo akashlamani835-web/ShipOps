@@ -2588,7 +2588,7 @@ function TelemetryPage({
   const [unit, setUnit] = useState("percent");
   const [source, setSource] = useState("telemetry-console");
   const [quality, setQuality] = useState("good");
-  const [sourceSequence, setSourceSequence] = useState(() => Date.now());
+  const [sourceSequence, setSourceSequence] = useState(1);
   const [extraData, setExtraData] = useState('{"interface":"eth0"}');
 
 
@@ -3516,7 +3516,7 @@ function App() {
           observed_at: new Date(now - point.offset).toISOString(),
           received_at: new Date().toISOString(),
           source: "telemetry-console",
-          source_sequence: now + index,
+          source_sequence: index + 1,
           quality: "good",
           idempotency_key: `THRESHOLD-${now}-${index}`,
           extra_data: { test: "sustained-threshold", threshold: 30 },
