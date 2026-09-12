@@ -42,6 +42,11 @@ class EventStatus(str, Enum):
     RESOLVED = "resolved"
 
 
+def _enum_values(enum_class: type[Enum]) -> list[str]:
+    """Return enum values for SQLAlchemy string-backed enums."""
+    return [member.value for member in enum_class]
+
+
 class EventRule(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """Define when telemetry should produce an operational event."""
 
@@ -102,6 +107,7 @@ class EventRule(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             EventSeverity,
             name="event_severity",
             native_enum=False,
+            values_callable=_enum_values,
         ),
         nullable=False,
     )
@@ -167,6 +173,7 @@ class OperationalEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             EventSeverity,
             name="event_severity",
             native_enum=False,
+            values_callable=_enum_values,
         ),
         nullable=False,
     )
@@ -176,6 +183,7 @@ class OperationalEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             EventStatus,
             name="event_status",
             native_enum=False,
+            values_callable=_enum_values,
         ),
         nullable=False,
         default=EventStatus.OPEN,
